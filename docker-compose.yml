@@ -1,0 +1,112 @@
+ 
+services:
+  postgres:
+    image: postgres:15
+    container_name: personas_db
+    environment:
+      POSTGRES_USER: ${DB_USER:-admin}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secure_password_123}
+      POSTGRES_DB: ${DB_NAME:-personas_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  auth-service:
+    build: ./services/auth
+    container_name: auth_service
+    ports:
+      - "8001:8000"
+    environment:
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN:-dev-example.auth0.com}
+      AUTH0_API_AUDIENCE: ${AUTH0_API_AUDIENCE:-https://api.example.com}
+    networks:
+      - app-network
+
+  personas-service:
+    build: ./services/personas
+    container_name: personas_service
+    ports:
+      - "8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-admin}:${DB_PASSWORD:-secure_password_123}@postgres:5432/${DB_NAME:-personas_db}
+    networks:
+      - app-network
+
+  consultas-service:
+    build: ./services/consultas
+    # No usar container_name cuando hay replicas
+    ports:
+      - "8003-8004:8000"  # Rango de puertos para múltiples réplicas
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-admin}:${DB_PASSWORD:-secure_password_123}@postgres:5432/${DB_NAME:-personas_db}
+    deploy:
+      replicas: 2
+    networks:
+      - app-network
+
+  nlp-service:
+    build: ./services/nlp
+    container_name: nlp_service
+    ports:
+      - "8005:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-admin}:${DB_PASSWORD:-secure_password_123}@postgres:5432/${DB_NAME:-personas_db}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    networks:
+      - app-network
+
+  logs-service:
+    build: ./services/logs
+    container_name: logs_service
+    ports:
+      - "8006:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-admin}:${DB_PASSWORD:-secure_password_123}@postgres:5432/${DB_NAME:-personas_db}
+    networks:
+      - app-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: api_gateway
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./frontend:/usr/share/nginx/html
+    depends_on:
+      - auth-service
+      - personas-service
+      - consultas-service
+      - nlp-service
+      - logs-service
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge
+ 
